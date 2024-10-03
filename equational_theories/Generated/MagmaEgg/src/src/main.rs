@@ -323,12 +323,22 @@ fn derive_equation(h: &Equation, goal: &Equation, ms: u64, node_limit: usize, le
     let h = patterns_from_equation(h);
     let goal = recexprs_from_equation(goal);
 
+    let mut egraph: EGraph<_, _> = Default::default();
+    let lhs_id = egraph.add_expr(&goal[0]);
+    let rhs_id = egraph.add_expr(&goal[1]);
+
     let runner = Runner::default()
+        .with_egraph(egraph)
         .with_explanations_enabled()
         .with_node_limit(node_limit)
         .with_time_limit(Duration::from_millis(ms))
-        .with_expr(&goal[0])
-        .with_expr(&goal[1]);
+        .with_hook(move |runner| {
+            if runner.egraph.find(lhs_id) == runner.egraph.find(rhs_id) {
+                Err("search complete".to_string())
+            } else {
+                Ok(())
+            }
+        });
 
     let runner = if length_optimization {
         runner.with_explanation_length_optimization()

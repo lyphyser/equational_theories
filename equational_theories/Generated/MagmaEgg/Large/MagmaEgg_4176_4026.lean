@@ -1,0 +1,131 @@
+import equational_theories.AllEquations
+import equational_theories.Magma
+
+private def congr_op {G: Type _} [Magma G] {a b c d: G} (h1: a = b) (h2: c = d): a ∘ c = b ∘ d := by
+  rw [h1, h2]
+private abbrev T := @Eq.trans
+private abbrev S := @Eq.symm
+private abbrev R := @Eq.refl
+private abbrev M := @Magma.op
+private abbrev C := @congr_op
+
+set_option maxRecDepth 999999
+
+@[equational_result]
+theorem Equation4176_implies_Equation4026 (G: Type _) [Magma G] (h: Equation4176 G) : Equation4026 G := fun x y z =>
+  let v0 := M z y
+  let v1 := M z v0
+  have h2 := h v1 x x
+  have h3 := S h2
+  let v4 := M x x
+  have h5 := R x
+  have h6 := R v1
+  have h7 := h x x z
+  have h8 := S h7
+  have h9 := R z
+  have h10 := h x z v0
+  have h11 := h v0 v1 x
+  have h12 := C (T h11 (C (S h10) h5)) h9
+  have h13 := T h12 h8
+  have h14 := h z v0 v1
+  have h15 := h x x x
+  have h16 := S h15
+  have h17 := h x x y
+  have h18 := C (S h17) h5
+  let v19 := M x y
+  have h20 := h y v19 x
+  have h21 := R y
+  have h22 := h y y v1
+  have h23 := S h22
+  have h24 := h y v1 x
+  have h25 := C (S h24) h21
+  let v26 := M v1 x
+  have h27 := h x v26 y
+  have h28 := h x v26 v0
+  have h29 := S h28
+  have h30 := R v0
+  have h31 := C h11 h30
+  have h32 := h v0 v0 v1
+  have h33 := h x y v1
+  have h34 := S h33
+  let v35 := M y v1
+  have h36 := h (M v35 x) v1 x
+  have h37 := S h36
+  have h38 := h v35 x v26
+  have h39 := R v26
+  have h40 := R v35
+  have h41 := h x v26 v1
+  have h42 := S h41
+  have h43 := h v1 x y
+  have h44 := h y v19 v1
+  have h45 := S h20
+  have h46 := C h17 h5
+  have h47 := C (T h46 h45) h5
+  have h48 := C (T (T h15 h47) (C (T h44 (C (S h43) h6)) h5)) h6
+  have h49 := h v4 v1 v26
+  have h50 := R (M v1 v26)
+  have h51 := h (M (M v0 v1) z) v1 v26
+  have h52 := T (T (T (T (T h14 h51) (C (C h50 h13) h39)) (S h49)) h48) h42
+  have h53 := h v1 v35 z
+  have h54 := h z y v1
+  have h55 := h v0 z y
+  have h56 := S h55
+  have h57 := S h11
+  have h58 := C h57 h30
+  have h59 := C (T (T h22 (C (T (T (T (C h24 h21) (S h27)) h28) h58) h6)) (S h32)) h21
+  have h60 := h y y y
+  have h61 := S h60
+  have h62 := C (T (T h32 (C (T (T (T h31 h29) h27) h25) h6)) h23) h21
+  have h63 := h z y v19
+  let v64 := M y v19
+  have h65 := h v19 v64 z
+  have h66 := C (T (T (T h65 (C (S h63) h9)) h55) h62) h21
+  have h67 := h v64 x y
+  have h68 := h x x v26
+  have h69 := S h68
+  have h70 := C (T h2 (C (T h48 h42) h5)) h39
+  have h71 := C (T (T (T (T (T (T h70 h69) h15) h47) h67) h66) h61) h21
+  have h72 := h y v26 v26
+  have h73 := h v26 (M y v26) z
+  have h74 := h z y v26
+  have h75 := C (T h20 h18) h5
+  have h76 := C (T (T (C (T (C h43 h6) (S h44)) h5) h75) h16) h6
+  have h77 := C (T (C (T h41 h76) h5) h3) h39
+  have h78 := C (T h68 h77) h21
+  have h79 := C (T (T (T (T (T (T h78 h71) h59) h56) (C h74 h9)) (S h73)) (C h39 (T (T h72 (C (T (T (T (T (T h71 h59) h56) (C h54 h9)) (S h53)) (C h52 h40)) h39)) (S h38)))) h5
+  have h80 := h y x x
+  have h81 := T (T (T h80 h79) h37) h34
+  have h82 := C h5 h81
+  let v83 := M y x
+  have h84 := h x v83 z
+  have h85 := S h84
+  have h86 := h z y x
+  have h87 := C h86 h9
+  have h88 := R v19
+  have h89 := C (T h70 h69) h21
+  have h90 := S h67
+  have h91 := C (T (T (T h59 h56) (C h63 h9)) (S h65)) h21
+  have h92 := C (T (T (T (T (T (T h60 h91) h90) h75) h16) h68) h77) h21
+  have h93 := C (S h54) h9
+  have h94 := C (T (C h10 h5) h57) h9
+  have h95 := T (T (T (T (T h41 h76) h49) (C (C h50 (T h7 h94)) h39)) (S h51)) (S h14)
+  have h96 := C (T (T (T (T (T (T (C h39 (T (T h38 (C (T (T (T (T (T (C h95 h40) h53) h93) h55) h62) h92) h39)) (S h72))) h73) (C (S h74) h9)) h55) h62) h92) h89) h5
+  have h97 := T (T (T h33 h36) h96) (S h80)
+  have h98 := h x x v19
+  have h99 := S h98
+  have h100 := C (T (T (T h33 h36) h96) (C (T (T (T (T (T (T h78 h71) h59) h56) h87) h85) h82) h5)) h88
+  have h101 := T (T (T (T (T (T h100 h99) h15) h47) h67) h66) h61
+  have h102 := h v0 v1 v19
+  have h103 := R v83
+  have h104 := h v83 z v0
+  have h105 := h v83 z y
+  have h106 := h z y z
+  have h107 := S h106
+  let v108 := M (M y z) z
+  have h109 := h v108 z v0
+  have h110 := h v1 v108 z
+  have h111 := h v0 v19 v19
+  have h112 := h y v0 v19
+  have h113 := h v0 y v0
+  T (T (T (h x y x) (C (T (h v83 x v1) (C (T (T (T (T (T (T (T (T (C (T (h x v1 v0) (C (T (C (T (T (T (T (T (T (T (C h52 h30) (C (T (T h28 h58) (C (T (T h102 (C (T (T (T (C (T (C h52 h97) (C h95 h103)) h30) (S h104)) h105) (C (T (C (T (T (T h106 h109) (C (T (T (T (T (T (T (T (T h110 (C (C h107 h6) h9)) h12) h8) h15) h47) h67) h66) h61) h30)) (C (T (T (T (T (T (T h60 h91) h90) h75) h16) h98) (C (T (T (T (C (T (T (T (T (T (T (C h5 h97) h84) (C (S h86) h9)) h55) h62) h92) h89) h5) h79) h37) h34) h88)) h30)) h81) (S h111)) h21)) h88)) (S h112)) h30)) h30)) (S h113)) (h v0 y z)) (C (T (C (T (h y z y) (C (T (T h113 (C (T (T (C (T (T h112 (C (T (T (T (C (T h111 (C (T (T (T (C h101 h30) (C (T (T (T (T (T (T (T (T h60 h91) h90) h75) h16) h7) h94) (C (C h106 h6) h9)) (S h110)) h30)) (S h109)) h107) h97)) h21) (S h105)) h104) (C (T (C h52 h103) (C h95 h81)) h30)) h88)) (S h102)) h30) h31) h29) h30)) (C h95 h30)) h21)) h30) (S (h y v1 v0))) h9)) (h v35 z v0)) (C (T (T (T (T h53 h93) h87) h85) h82) h30)) (C (T (T (T (T (h x v19 v19) (C (T (T (T (T (C (T h100 h99) h5) h46) h45) (h y v19 v19)) (C (T (T (T (T (T (C h101 h21) h59) h56) h87) h85) h82) h97)) h88)) (S (h v83 x v19))) (h v83 x x)) (C (T (T (T (T (T (C (T (T (T (T h15 h47) h67) h66) (C (T (T (T (T h59 h56) h87) h85) h82) h21)) h81) (S (h y x v19))) h80) h79) h37) h34) h5)) h30)) h5) (S (h v0 v19 x))) h30)) h81) (S (h v0 v0 v19))) h32) (C (T h31 h29) h6)) (C (T h27 h25) h6)) h23) (h y y x)) (C (T (T (T (C (h y x y) h21) (S (h y v19 y))) h20) h18) h5)) h16) (T h14 (C h13 h6)))) h5)) (S (h (M v4 v1) x x))) h3
+

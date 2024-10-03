@@ -11,7 +11,7 @@ use serde_derive::Deserialize;
 use smallvec::SmallVec;
 use tempfile::NamedTempFile;
 use std::{
-    borrow::Cow, cell::{Cell, RefCell}, collections::{BTreeMap, BTreeSet, HashSet}, fmt::Display, fs::{self, File}, future::Future, io::{self, BufRead, BufReader, BufWriter, Read, Write}, iter, path::{Path, PathBuf}, str::FromStr, sync::LazyLock, thread, time::Duration
+    borrow::Cow, cell::{Cell, RefCell}, collections::{BTreeMap, BTreeSet, HashSet}, ffi::OsString, fmt::Display, fs::{self, File}, future::Future, io::{self, BufRead, BufReader, BufWriter, Read, Write}, iter, os::unix::fs::MetadataExt, path::{Path, PathBuf}, str::FromStr, sync::LazyLock, thread, time::Duration
 };
 use egg::{define_language, Analysis, Applier, EGraph, ENodeOrVar, Id, Language, Pattern, PatternAst, RecExpr, Rewrite, Runner, SearchMatches, Subst, Symbol, Var};
 use anyhow::{anyhow, Result};
@@ -788,7 +788,9 @@ impl App {
 #[derive(Parser, Debug)]
 struct AssembleArgs {
     /// Directory to write the output files to
-    output: PathBuf
+    output: PathBuf,
+    /// Assemble all available proofs rather than only those from implications
+    all: bool
 }
 
 struct OutputFile {
@@ -830,18 +832,26 @@ impl App {
         let re = implication_regex();
         let mut proofs = Vec::new();
 
-        for entry in fs::read_dir(&self.args.proofs)? {
-            let entry = entry?;
-            let os_name = entry.file_name();
-            if let Some(name) = os_name.as_os_str().to_str() {
-                if name.ends_with(".lean.zst") {
-                    if let Some(captures) = re.captures(&name) {
-                        let h = captures.get(1).unwrap().as_str().parse::<usize>()?;
-                        let goal = captures.get(2).unwrap().as_str().parse::<usize>()?;
-                        let size = entry.metadata()?.len();
-                        proofs.push((size, (h, goal), os_name));
+        if args.all {
+            for entry in fs::read_dir(&self.args.proofs)? {
+                let entry = entry?;
+                let os_name = entry.file_name();
+                if let Some(name) = os_name.as_os_str().to_str() {
+                    if name.ends_with(".lean.zst") {
+                        if let Some(captures) = re.captures(&name) {
+                            let h = captures.get(1).unwrap().as_str().parse::<usize>()?;
+                            let goal = captures.get(2).unwrap().as_str().parse::<usize>()?;
+                            let size = entry.metadata()?.len();
+                            proofs.push((size, (h, goal), os_name));
+                        }
                     }
                 }
+            }
+        } else {
+            for (h, goal) in self.implications {
+                let os_name = OsString::from(format!("{}_{}.lean.zst", h, goal));
+                let md = fs::metadata(self.args.proofs.join(&os_name))?;
+                proofs.push((md.size(), (h, goal), os_name));
             }
         }
 
@@ -910,7 +920,7 @@ private abbrev C := @congr_op
                 }
 
                 if cur_small.is_none() {
-                    let out_name = format!("MagmaEgg_small{:02}.lean", next_small_idx);
+                    let out_name = format!("_{:03}.lean", next_small_idx);
                     next_small_idx += 1;
 
                     let mut out = OutputFile::new(&output_small, &out_name)?;
@@ -922,7 +932,7 @@ private abbrev C := @congr_op
                     out.append(&proof, lines)?;
                 }
             } else {
-                let out_name = format!("MagmaEgg_{}_{}", h, goal);
+                let out_name = format!("{}_{}", h, goal);
                 let mut out = OutputFile::new(&output_large, &format!("{}.lean", out_name))?;
                 large_files.push(out_name);
                 out.append(header, header_lines)?;
@@ -938,7 +948,7 @@ private abbrev C := @congr_op
 
         let mut out = OutputFile::new(&args.output, "small.lean")?;
         for i in 0..next_small_idx {
-            out.append(&format!("import equational_theories.Generated.MagmaEgg.small.MagmaEgg_small{:02}\n", i), 1)?;
+            out.append(&format!("import equational_theories.Generated.MagmaEgg.small._{:03}\n", i), 1)?;
         }
         out.close()?;
 

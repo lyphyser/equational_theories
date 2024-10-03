@@ -1,6 +1,9 @@
+use async_pidfd::AsyncPidFd;
 use clap::{Parser, Subcommand};
 use export::{AppHead, Expr, ExprId, Function, Fixity, Rule, RuleDirection};
+use futures::{stream::FuturesUnordered, StreamExt, TryFutureExt};
 use fxhash::FxHashMap;
+use libc::CLD_EXITED;
 use regex::Regex;
 use ron::de::SpannedError;
 use serde::Serialize;
@@ -8,12 +11,11 @@ use serde_derive::Deserialize;
 use smallvec::SmallVec;
 use tempfile::NamedTempFile;
 use std::{
-    borrow::Cow, collections::{BTreeMap, BTreeSet, HashSet}, fmt::Display, fs::{self, File}, io::{self, BufRead, BufReader, BufWriter, Read, Write}, iter, path::{Path, PathBuf}, str::FromStr, sync::{Barrier, LazyLock, Mutex, RwLock, RwLockReadGuard}, thread, time::Duration
+    borrow::Cow, cell::{Cell, RefCell}, collections::{BTreeMap, BTreeSet, HashSet}, fmt::Display, fs::{self, File}, future::Future, io::{self, BufRead, BufReader, BufWriter, Read, Write}, iter, path::{Path, PathBuf}, str::FromStr, sync::LazyLock, thread, time::Duration
 };
 use egg::{define_language, Analysis, Applier, EGraph, ENodeOrVar, Id, Language, Pattern, PatternAst, RecExpr, Rewrite, Runner, SearchMatches, Subst, Symbol, Var};
 use anyhow::{anyhow, Result};
-use nix::{sys::wait::WaitStatus, unistd::{fork, ForkResult}};
-use nix::sys::wait::waitpid;
+use nix::unistd::{fork, ForkResult};
 
 mod export;
 
@@ -535,86 +537,67 @@ fn with_stack_size<T: Send>(stack_size: usize, f: impl FnOnce() -> T + Send) -> 
     })
 }
 
-struct SubprocessSpawner<'a, 'b> {
-    mt_lock: &'a RwLock<()>,
-    mt_guard: &'b mut Option<RwLockReadGuard<'a, ()>>
-}
-
-impl<'a, 'b> SubprocessSpawner<'a, 'b> {
-    fn in_subprocess(&mut self, f: impl FnOnce() -> i32) -> Result<i32> {
-        *self.mt_guard = None;
-        let mt_write_guard = self.mt_lock.write().unwrap();
-        let status = match unsafe { fork() }? {
-            ForkResult::Parent { child } => {
-                drop(mt_write_guard);
-                waitpid(child, None)?
-            }
-            ForkResult::Child => {
-                drop(mt_write_guard);
-                let res = f();
-                unsafe { libc::_exit(res) };
-            }
-        };
-        *self.mt_guard = Some(self.mt_lock.read().unwrap());
-
-        match status {
-            WaitStatus::Exited(_, ret) => Ok(ret),
-            status => Err(anyhow!("fork child terminated due to {:?}", status))
+async fn in_subprocess(f: impl FnOnce() -> i32) -> Result<i32> {
+    let status = match unsafe { fork() }? {
+        ForkResult::Parent { child } => {
+            // TODO: ideally we should use CLONE_PIDFD instead
+            let pidfd = AsyncPidFd::from_pid(child.into())?;
+            pidfd.wait().await?
         }
-    }
+        ForkResult::Child => {
+            let res = f();
+            unsafe { libc::_exit(res) };
+        }
+    };
 
-    fn in_subprocess_with_stack_size(&mut self, stack_size: usize, f: impl FnOnce() -> i32 + Send) -> Result<i32> {
-        self.in_subprocess(|| {
-            with_stack_size(stack_size, f)
-        })
+    if status.siginfo.si_code == CLD_EXITED {
+        // SAFETY: just reads an integer-type field from a POD struct, also it should indeed the correct union case
+        Ok(unsafe {status.siginfo.si_status()})
+    } else {
+        Err(anyhow!("fork child terminated due to {:?}", status.siginfo))
     }
 }
 
-fn in_parallel<E: Send>(parallelism: usize, f: impl Fn(usize) -> Result<(), E> + Sync) -> Result<(), E> {
-    let f = &f;
-    thread::scope(|scope| {
-        let handles = (0..parallelism).map(|i| {
-            scope.spawn(move || f(i))
-        }).collect::<Vec<_>>();
-
-        for handle in handles {
-            handle.join().unwrap()?;
-        }
-        Ok(())
-    })
+async fn in_subprocess_with_stack_size(stack_size: usize, f: impl FnOnce() -> i32 + Send) -> Result<i32> {
+    in_subprocess(|| {
+        with_stack_size(stack_size, f)
+    }).await
 }
 
-// technically forking in a multithreaded program is UB,
-// but we use barrier and mt_lock to ensure that all other threads are also inside in_subprocess, either waiting for the write lock or in waitpid()
-// so it should be fine for any reasonable libc implementation
+fn process_async<E: Send, I: IntoIterator, F: Future<Output = Result<(), E>>>(
+    parallelism: usize,
+    items: I,
+    f: impl Fn(I::Item) -> F
+) -> Result<(), E> {
+    let items = RefCell::new(items.into_iter());
 
-// alternatively we could fork a single process at startup and then communicate with it to have it spawn more processes
-// or spawn processes to parallelize and use IPC or file system locks to get work items
+    let mut futures = FuturesUnordered::new();
 
-// we have to use a subprocess because this can stack overflow or get OOM killed
-fn process_in_parallel_with_subprocess_spawner<E: Send, I: IntoIterator<Item: Send>>(parallelism: usize, items: I, f: impl Fn(&mut SubprocessSpawner, I::Item) -> Result<(), E> + Sync) -> Result<(), E> {
-    let mut items: Vec<_> = items.into_iter().collect();
-    items.reverse();
-    let items = Mutex::new(items);
-
-    let mt_lock = &RwLock::new(());
-    let barrier = Barrier::new(parallelism);
-
-    in_parallel(parallelism, |_| {
-        // make sure we don't fork while a thread is being spawned
-        barrier.wait();
-        let mut mt_guard = Some(mt_lock.read().unwrap());
-        let mut spawner = SubprocessSpawner {mt_lock, mt_guard: &mut mt_guard};
-        loop {
-            let item = items.lock().unwrap().pop();
-            if let Some(item) = item {
-                f(&mut spawner, item)?
-            } else {
-                break
+    for _ in 0..parallelism {
+        futures.push(async {
+            loop {
+                let item = items.borrow_mut().next();
+                match item {
+                    Some(item) => {
+                        if let Err(e) = f(item).await {
+                            return Err(e);
+                        }
+                    }
+                    None => break,
+                }
             }
+            Ok(())
+        });
+    }
+
+    async_io::block_on(async {
+        while let Some(result) = futures.next().await {
+            result?;
         }
         Ok::<_, E>(())
-    })
+    })?;
+
+    Ok(())
 }
 
 #[derive(Parser, Debug)]
@@ -690,59 +673,63 @@ impl App {
 impl App {
     fn search(self, args: SearchArgs) -> Result<()> {
         let implications: Vec<_> = self.implications.into_iter().filter(|x| !self.db.proven.contains(x) && self.db.attempted.get(x).filter(|&&x| x >= args.ms).is_none()).collect();
-        let db = Mutex::new(self.db);
+        let db = RefCell::new(self.db);
 
-        process_in_parallel_with_subprocess_spawner(self.parallelism,implications, |spawner, item| {
-            let (h, goal) = item;
-            eprintln!("{} => {}", h, goal);
-            let mut proven = false;
-            let mut args = args.clone();
-            loop {
-                let ret = spawner.in_subprocess_with_stack_size(self.args.stack_size, || {
-                    let res = (|| {
-                        let res = derive_equation(&self.equations[h], &self.equations[goal], &args)?;
-                        if let Some(explanation) = res {
-                            let str = explanation.get_string_with_let();
-                            eprintln!("{} => {}: proven with len {}", h, goal, str.len());
-                            write_proof(&self.args.proofs, (h, goal), &Proof::Implication(Implication::LetExplanation(str)))?;
-                            Ok::<_, anyhow::Error>(0)
-                        } else {
-                            Ok(1)
-                        }
-                    })();
+        process_async(self.parallelism,implications, | item| {
+            // move item in the closure by wrapping it in Cell which is !Copy
+            let item = Cell::new(item);
+            async {
+                let (h, goal) = item.into_inner();
+                eprintln!("{} => {}", h, goal);
+                let mut proven = false;
+                let mut args = args.clone();
+                loop {
+                    let ret = in_subprocess_with_stack_size(self.args.stack_size, || {
+                        let res = (|| {
+                            let res = derive_equation(&self.equations[h], &self.equations[goal], &args)?;
+                            if let Some(explanation) = res {
+                                let str = explanation.get_string_with_let();
+                                eprintln!("{} => {}: proven with len {}", h, goal, str.len());
+                                write_proof(&self.args.proofs, (h, goal), &Proof::Implication(Implication::LetExplanation(str)))?;
+                                Ok::<_, anyhow::Error>(0)
+                            } else {
+                                Ok(1)
+                            }
+                        })();
 
-                    match res {
-                        Ok(x) => x,
-                        Err(e) => {
-                            eprintln!("{}", e);
-                            3
+                        match res {
+                            Ok(x) => x,
+                            Err(e) => {
+                                eprintln!("{}", e);
+                                3
+                            }
                         }
+                    }).await;
+
+                    match ret {
+                        Ok(0) => {proven = true; break},
+                        Ok(1) => {break}
+                        _ => {}
                     }
-                });
 
-                match ret {
-                    Ok(0) => {proven = true; break},
-                    Ok(1) => {break}
-                    _ => {}
+                    if args.length_optimization {
+                        // length optimization currently often crashes the process, try again without it
+                        // TODO: we should probably either fix it or run explanation extraction in a forked subprocess so we don't have to search again for the proof
+                        args.length_optimization = false;
+                        continue;
+                    }
+
+                    break
                 }
-
-                if args.length_optimization {
-                    // length optimization currently often crashes the process, try again without it
-                    // TODO: we should probably either fix it or run explanation extraction in a forked subprocess so we don't have to search again for the proof
-                    args.length_optimization = false;
-                    continue;
+                let mut db = db.borrow_mut();
+                if proven {
+                    db.proven.insert((h, goal));
+                } else {
+                    db.attempted.insert((h, goal), args.ms);
                 }
-
-                break
+                db.write(&self.args.db)?;
+                Ok(())
             }
-            let mut db = db.lock().unwrap();
-            if proven {
-                db.proven.insert((h, goal));
-            } else {
-                db.attempted.insert((h, goal), args.ms);
-            }
-            db.write(&self.args.db)?;
-            Ok(())
         })
     }
 }
@@ -756,9 +743,11 @@ impl App {
     fn export(self, _args: ExportArgs) -> Result<()> {
         let implications: Vec<_> = self.implications.into_iter().filter(|x| self.db.proven.contains(x)).collect();
 
-        process_in_parallel_with_subprocess_spawner(self.parallelism,implications, |spawner, implication| {
-            spawner.in_subprocess_with_stack_size(self.args.stack_size, || {
+        process_async(self.parallelism, implications, |implication| {
+            let implication = Cell::new(implication);
+            in_subprocess_with_stack_size(self.args.stack_size, || {
                 let res = (|| {
+                    let implication = implication.into_inner();
                     let (h, goal) = implication;
                     eprintln!("{} => {}", h, goal);
                     let proof = read_proof(&self.args.proofs, implication)?;
@@ -791,8 +780,7 @@ impl App {
                         1
                     }
                 }
-            })?;
-            Ok(())
+            }).map_ok(|_| ())
         })
     }
 }
